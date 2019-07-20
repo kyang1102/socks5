@@ -1,139 +1,200 @@
 #include <stdio.h>
-#include <string.h>
 #include <sys/socket.h>
-#include <sys/types.h>
+#include <string.h>
 #include <arpa/inet.h>
 #include <stdlib.h>
+#include <pthread.h>
 
-static char* ip = "127.0.0.1";
-static int port = 2019;
+#define BUF_SIZE 10240
+static const int QUEUE_SIZE = 100;
 
-int main() {
+// 	无服务监听的地址
+static char* listenIp = NULL;
+static int listenPort = 0;
 
-    int serverFd = socket(AF_INET, SOCK_STREAM, 0);
-    if (serverFd < 0) {
-        perror("socket");
-        return -1;
-    }
-    struct sockaddr_in serverAddr;
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_addr.s_addr = inet_addr(ip);
-    serverAddr.sin_port = htons(port);
-    
-    if (bind(serverFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        perror("bind");
-        return -2;
-    }
+// 域名解析
+int nameToIp(char* name) {
+	return inet_addr("180.101.49.12");
+}
 
-    if (listen(serverFd, 100) < 0) {
-        perror("listen");
-        return -3;
-    }
-    
-    printf("listen...\n");
+void* worker(void* fd) {
+	char buf[BUF_SIZE];
+	memset(buf, 0, sizeof(buf));
+	
+	/**** 客户端，服务端协商验证方法 ***/
+	if (recv((int)fd, buf, sizeof(buf), 0) < 0) {
+		perror("recv");
+		return NULL;
+	}
+	
+	// 验证和处理客户端发过来的数据
+	int version =(int)buf[0];
+	if (version != 5) {
+		printf("not socks5 protocol\n");
+		return NULL;
+	}
+	int nmethods = (int)buf[1];
+	int size = nmethods * sizeof(int);
+	int *methods = malloc(size);	
+	memset(methods, 0, size);
+	int i = 0;
+	for(i = 0; i < nmethods; i++) {
+		methods[i] = (int)buf[2 + i];
+	}
 
-    struct sockaddr_in clientAddr;
-    socklen_t clientAddrLen = sizeof(clientAddr); 
-    int clientFd = accept(serverFd, (struct sockaddr*)&clientAddr, &clientAddrLen);
-    if (clientFd < 0) {
-        perror("accept");
-        return -4;
-    }
+	// 响应客户端
+	memset(buf, 0, sizeof(buf));
+	buf[0] = 5;
+	buf[1] = 0;
+	if (send((int)fd, buf, 2, 0) < 0) {
+		perror("send");
+		return NULL;
+	}
 
-    printf("%s:%d connnet successfully\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port));
+	/***** 协商认证阶段完成 *******/
 
-    char buf[20000] = {0};
-    if (recv(clientFd, buf, sizeof(buf), 0) <= 0) {
-        perror("recv");
-        return -5;
-    }
+	/**** 处理客户端发过来的数据包 ****/
+	memset(buf, 0, sizeof(buf));
+	if (recv((int)fd, buf, sizeof(buf), 0) < 0) {
+		perror("recv");
+		return NULL;
+	}
+	unsigned short aType = (unsigned short)buf[3];
+	unsigned long remoteIp;
+	unsigned short remotePort;
+	unsigned short nameSize;
+	char *name = NULL;
+	switch(aType) {
+		case 1:
+			// 地址类型为ipv4
+			remoteIp = *((int*)(buf + 4));
+			memcpy(&remotePort, buf + 8, 2);
+			break;
+		case 3: 
+			nameSize = (unsigned short)buf[4];
+			name = malloc(nameSize + 1);
+			memset(name, 0, nameSize + 1);
+			memcpy(name, buf + 5, nameSize);
+			remoteIp = nameToIp(name);
+			memcpy(&remotePort, buf + 4 + nameSize, 2);
+			break;
+		default:
+			printf("address type is wrong\n");
+			return NULL;
 
-    int version = buf[0];
-    if (version != 5) {
-        return -6;
-    }
-
-    int nmethods = buf[1];
-    char* methods = malloc(nmethods);
-    memcpy(methods, buf + 2, nmethods);
-    
-    memset(buf, 0, sizeof(buf));
-    buf[0] = 5;
-    buf[1] = 0;
-    if (send(clientFd, buf, 2, 0) < 0) {
-        perror("send");
-        return -7;
-    }
-
-    memset(buf, 0, sizeof(buf));
-    if (recv(clientFd, buf, sizeof(buf), 0) <= 0) {
-        perror("recv");
-        return -8;
-    }
-    int aType = buf[3];
-    if (aType != 1) {
-        printf("not ipv4");
-        return -8;
-    }
-
-	// 与目标服务器进行连接，进行通信
+	}
+	// 解析客户端数据包，获取ip以及端口
 	struct sockaddr_in remoteAddr;
 	memset(&remoteAddr, 0, sizeof(remoteAddr));
 	remoteAddr.sin_family = AF_INET;
-	memcpy(&(remoteAddr.sin_addr), buf + 4, 4);
-	memcpy(&(remoteAddr.sin_port), buf + 8, 2);
-    printf("remote addr %s:%d\n", inet_ntoa(remoteAddr.sin_addr), ntohs(remoteAddr.sin_port));
+	remoteAddr.sin_addr.s_addr = remoteIp;
+	remoteAddr.sin_port = remotePort;
+	remoteAddr.sin_port = remotePort;
 
-	int sockFd;
-	if ((sockFd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-		perror("socket");
-		return -9;
+	printf("remote addr %s:%d\n", inet_ntoa(remoteAddr.sin_addr), ntohs(remoteAddr.sin_port));
+
+	// 响应客户端发送的数据波
+	memset(buf, 0, sizeof(buf));
+	buf[0] = 5;
+	buf[1] = 0;
+	buf[2] = 0;
+	buf[3] = 1;
+
+	int ip = inet_addr(listenIp);
+	memcpy(buf + 4, &ip, 4);
+	memcpy(buf + 8, &listenPort, 2);
+
+	if (send((int)fd, buf, 10, 0) < 0) {
+		perror("send");
+		return NULL;
 	}
 
-	if (connect(sockFd, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr)) < 0) {
-		perror("connect");
-		return -10;
-	}
+	/*** 处理客户端数据结束 **/
+
+	/*** 转发客户端数据给远程服务器并且将远程服务器的响应转发给客户端 ***/
 
 	memset(buf, 0, sizeof(buf));
-	buf[0] = 0x5;
-	buf[1] = 0x0;
-	buf[2] = 0x0;
-	buf[3] = 0x1;
-	in_addr_t netIp = inet_addr(ip);
-	int netPort = htons(port);
-	memcpy(buf + 4, &netIp, 4);
-	memcpy(buf + 8, &netPort, 2);
+	int _s = 0;
+	if ((_s = recv((int)fd, buf, sizeof(buf), 0)) < 0) {
+		perror("recv");
+		return NULL;
+	}
 
-	if (send(clientFd, buf, 10, 0) < 0) {
+	int remoteFd = socket(AF_INET, SOCK_STREAM, 0);
+	if (remoteFd < 0) {
+		perror("socket");
+		return NULL;
+	}
+	if (connect(remoteFd, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr)) < 0) {
+		perror("connect");
+		return NULL;
+	}
+	
+	if (send(remoteFd, buf, _s, 0) < 0) {
 		perror("send");
-		return -11;	
+		return NULL;
 	}
 	
 	memset(buf, 0, sizeof(buf));
-	int _s = 0;
-	if ((_s = recv(clientFd, buf, sizeof(buf), 0)) <= 0) {
+	if ((_s = recv(remoteFd, buf, sizeof(buf), 0)) < 0) {
 		perror("recv");
-		return -12;
+		return NULL;
 	}
-
-	if (send(sockFd, buf, _s, 0) < 0) {
+	
+	printf("data len:%d\n", _s);
+	if (send((int)fd, buf, _s, 0) < 0) {
 		perror("send");
-		return -13;
+		return NULL;
+	}
+	
+	return NULL;
+}
+
+
+int main(int argc,  char* argv[]) {
+	if (argc < 3) {
+		printf("missing parameters\n");
+		return -1;
 	}
 
-	memset(buf, 0, sizeof(buf));
-	if ((_s = recv(sockFd, buf, sizeof(buf), 0)) <= 0) {
-		perror("recv");
-		return -14;
+	listenIp = argv[1];
+	listenPort = atoi(argv[2]);
+		
+	int listenFd = socket(AF_INET, SOCK_STREAM, 0);
+	if (listenFd < 0) {
+		perror("socket");
+		return -2;
+	}
+	struct sockaddr_in listenAddr;
+	memset(&listenAddr, 0, sizeof(listenAddr));
+	listenAddr.sin_family = AF_INET;
+	listenAddr.sin_addr.s_addr = inet_addr(listenIp);
+	listenAddr.sin_port = htons(listenPort);
+
+	if (bind(listenFd, (struct sockaddr*)&listenAddr, sizeof(listenAddr)) < 0) {
+		perror("bind");
+		return -3;
 	}
 
-	if (send(clientFd, buf, _s, 0) < 0) {
-		perror("send");
-		return -15;
+	if (listen(listenFd, QUEUE_SIZE) < 0) {
+		perror("listen");
+		return -4;
+	}
+
+	while (1) {
+		int clientFd = accept(listenFd, NULL, NULL);	
+		if (clientFd < 0) {
+			perror("accept");
+			return -5;
+		}
+
+		pthread_t tid;
+		int ret;
+		if ((ret = pthread_create(&tid, NULL, worker, (void*)clientFd)) != 0) {
+			printf("pthread_create:%d");
+		}
 	}
 
 
-    return 0;
+	return 0;
 }
