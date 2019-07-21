@@ -1,5 +1,5 @@
-server:server.c
-	gcc server.c -o server
+server:server.c cregex.c
+	gcc server.c cregex.c -o server
 
 clean:
 	rm server

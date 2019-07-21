@@ -4,6 +4,8 @@
 #include <arpa/inet.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <sys/select.h>
+#include "cregex.h"
 
 #define BUF_SIZE 10240
 static const int QUEUE_SIZE = 100;
@@ -11,6 +13,7 @@ static const int QUEUE_SIZE = 100;
 // 	无服务监听的地址
 static char* listenIp = NULL;
 static int listenPort = 0;
+
 
 // 域名解析
 int nameToIp(char* name) {
@@ -76,7 +79,7 @@ void* worker(void* fd) {
 			memset(name, 0, nameSize + 1);
 			memcpy(name, buf + 5, nameSize);
 			remoteIp = nameToIp(name);
-			memcpy(&remotePort, buf + 4 + nameSize, 2);
+			memcpy(&remotePort, buf + 5 + nameSize, 2);
 			break;
 		default:
 			printf("address type is wrong\n");
@@ -88,7 +91,6 @@ void* worker(void* fd) {
 	memset(&remoteAddr, 0, sizeof(remoteAddr));
 	remoteAddr.sin_family = AF_INET;
 	remoteAddr.sin_addr.s_addr = remoteIp;
-	remoteAddr.sin_port = remotePort;
 	remoteAddr.sin_port = remotePort;
 
 	printf("remote addr %s:%d\n", inet_ntoa(remoteAddr.sin_addr), ntohs(remoteAddr.sin_port));
@@ -113,13 +115,6 @@ void* worker(void* fd) {
 
 	/*** 转发客户端数据给远程服务器并且将远程服务器的响应转发给客户端 ***/
 
-	memset(buf, 0, sizeof(buf));
-	int _s = 0;
-	if ((_s = recv((int)fd, buf, sizeof(buf), 0)) < 0) {
-		perror("recv");
-		return NULL;
-	}
-
 	int remoteFd = socket(AF_INET, SOCK_STREAM, 0);
 	if (remoteFd < 0) {
 		perror("socket");
@@ -129,24 +124,71 @@ void* worker(void* fd) {
 		perror("connect");
 		return NULL;
 	}
+/*
+ #include <sys/select.h>
+
+     void
+     FD_CLR(fd, fd_set *fdset);
+
+     void
+     FD_COPY(fd_set *fdset_orig, fd_set *fdset_copy);
+
+     int
+     FD_ISSET(fd, fd_set *fdset);
+
+     void
+     FD_SET(fd, fd_set *fdset);
+
+     void
+     FD_ZERO(fd_set *fdset);
+
+     int
+     select(int nfds, fd_set *restrict readfds, fd_set *restrict writefds, fd_set *restrict errorfds,
+         struct timeval *restrict timeout);
+*/
+
+	fd_set fdSet;
+	fd_set fdSetBak;
+
+	FD_ZERO(&fdSet);
+	FD_SET((int)fd, &fdSet);
+	FD_SET(remoteFd, &fdSet);
+
+	fdSetBak = fdSet;
 	
-	if (send(remoteFd, buf, _s, 0) < 0) {
-		perror("send");
-		return NULL;
+	int _s = 0;
+
+	int nfds = (int)fd > remoteFd ? (int)fd + 1 : remoteFd + 1;
+	while(1) {
+		if (select(nfds, &fdSet, NULL, NULL, 0) < 0) {
+			perror("select");
+			return NULL;	
+		}	
+		if (FD_ISSET((int)fd, &fdSet)) {
+			memset(buf, 0, sizeof(buf));
+			if ((_s = recv((int)fd, buf, sizeof(buf), 0)) < 0) {
+				perror("recv");
+				return NULL;
+			}
+			if (send(remoteFd, buf, _s, 0) < 0) {
+				perror("send");
+				return NULL;
+			}
+		}
+		if (FD_ISSET(remoteFd, &fdSet)) {
+			memset(buf, 0, sizeof(buf));
+			if ((_s = recv(remoteFd, buf, sizeof(buf), 0)) < 0) {
+				perror("recv");
+				return NULL;
+			}
+			if (send((int)fd, buf, _s, 0) < 0) {
+				perror("send");
+				return NULL;
+			}
+		}
+		fdSet = fdSetBak;
 	}
-	
-	memset(buf, 0, sizeof(buf));
-	if ((_s = recv(remoteFd, buf, sizeof(buf), 0)) < 0) {
-		perror("recv");
-		return NULL;
-	}
-	
-	printf("data len:%d\n", _s);
-	if (send((int)fd, buf, _s, 0) < 0) {
-		perror("send");
-		return NULL;
-	}
-	
+
 	return NULL;
 }
 
