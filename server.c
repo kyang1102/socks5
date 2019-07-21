@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <sys/select.h>
-#include "cregex.h"
 
 #define BUF_SIZE 10240
 static const int QUEUE_SIZE = 100;
@@ -124,28 +123,6 @@ void* worker(void* fd) {
 		perror("connect");
 		return NULL;
 	}
-/*
- #include <sys/select.h>
-
-     void
-     FD_CLR(fd, fd_set *fdset);
-
-     void
-     FD_COPY(fd_set *fdset_orig, fd_set *fdset_copy);
-
-     int
-     FD_ISSET(fd, fd_set *fdset);
-
-     void
-     FD_SET(fd, fd_set *fdset);
-
-     void
-     FD_ZERO(fd_set *fdset);
-
-     int
-     select(int nfds, fd_set *restrict readfds, fd_set *restrict writefds, fd_set *restrict errorfds,
-         struct timeval *restrict timeout);
-*/
 
 	fd_set fdSet;
 	fd_set fdSetBak;
@@ -171,6 +148,7 @@ void* worker(void* fd) {
 				return NULL;
 			}
 			if (send(remoteFd, buf, _s, 0) < 0) {
+				printf("%s\n", buf);
 				perror("send");
 				return NULL;
 			}
@@ -182,6 +160,7 @@ void* worker(void* fd) {
 				return NULL;
 			}
 			if (send((int)fd, buf, _s, 0) < 0) {
+				printf("%s\n", buf);
 				perror("send");
 				return NULL;
 			}
@@ -196,8 +175,10 @@ void* worker(void* fd) {
 int main(int argc,  char* argv[]) {
 	if (argc < 3) {
 		printf("missing parameters\n");
-		return -1;
+		return 1;
 	}
+
+	signal(SIGPIPE, SIG_IGN); // 忽略SIGPIPE信号，不然进程会被默认处理，即终止掉
 
 	listenIp = argv[1];
 	listenPort = atoi(argv[2]);
@@ -205,7 +186,7 @@ int main(int argc,  char* argv[]) {
 	int listenFd = socket(AF_INET, SOCK_STREAM, 0);
 	if (listenFd < 0) {
 		perror("socket");
-		return -2;
+		return 2;
 	}
 	struct sockaddr_in listenAddr;
 	memset(&listenAddr, 0, sizeof(listenAddr));
@@ -215,25 +196,25 @@ int main(int argc,  char* argv[]) {
 
 	if (bind(listenFd, (struct sockaddr*)&listenAddr, sizeof(listenAddr)) < 0) {
 		perror("bind");
-		return -3;
+		return 3;
 	}
 
 	if (listen(listenFd, QUEUE_SIZE) < 0) {
 		perror("listen");
-		return -4;
+		return 4;
 	}
 
 	while (1) {
 		int clientFd = accept(listenFd, NULL, NULL);	
 		if (clientFd < 0) {
 			perror("accept");
-			return -5;
+			return 5;
 		}
 
 		pthread_t tid;
 		int ret;
 		if ((ret = pthread_create(&tid, NULL, worker, (void*)clientFd)) != 0) {
-			printf("pthread_create:%d");
+			printf("pthread_create:%d", ret);
 		}
 	}
 
