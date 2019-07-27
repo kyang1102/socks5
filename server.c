@@ -1,23 +1,19 @@
 #include <stdio.h>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <string.h>
 #include <arpa/inet.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <sys/select.h>
+#include "dns.h"
 
 #define BUF_SIZE 10240
-static const int QUEUE_SIZE = 100;
+static const int QUEUE_SIZE = 10;
 
 // 	无服务监听的地址
 static char* listenIp = NULL;
 static int listenPort = 0;
-
-
-// 域名解析
-int nameToIp(char* name) {
-	return inet_addr("180.101.49.12");
-}
 
 void* worker(void* fd) {
 	char buf[BUF_SIZE];
@@ -26,6 +22,7 @@ void* worker(void* fd) {
 	/**** 客户端，服务端协商验证方法 ***/
 	if (recv((int)fd, buf, sizeof(buf), 0) < 0) {
 		perror("recv");
+		close((int)fd);
 		return NULL;
 	}
 	
@@ -33,6 +30,7 @@ void* worker(void* fd) {
 	int version =(int)buf[0];
 	if (version != 5) {
 		printf("not socks5 protocol\n");
+		close((int)fd);
 		return NULL;
 	}
 	int nmethods = (int)buf[1];
@@ -50,6 +48,7 @@ void* worker(void* fd) {
 	buf[1] = 0;
 	if (send((int)fd, buf, 2, 0) < 0) {
 		perror("send");
+		close((int)fd);
 		return NULL;
 	}
 
@@ -59,38 +58,36 @@ void* worker(void* fd) {
 	memset(buf, 0, sizeof(buf));
 	if (recv((int)fd, buf, sizeof(buf), 0) < 0) {
 		perror("recv");
+		close((int)fd);
 		return NULL;
 	}
 	unsigned short aType = (unsigned short)buf[3];
-	unsigned long remoteIp;
-	unsigned short remotePort;
-	unsigned short nameSize;
 	char *name = NULL;
+	int nameSize = 0;
+	// 解析客户端数据包，获取ip以及端口
+	struct sockaddr_in remoteAddr;
+	memset(&remoteAddr, 0, sizeof(remoteAddr));
+	remoteAddr.sin_family = AF_INET;
 	switch(aType) {
 		case 1:
 			// 地址类型为ipv4
-			remoteIp = *((int*)(buf + 4));
-			memcpy(&remotePort, buf + 8, 2);
+			remoteAddr.sin_addr.s_addr = *((int*)(buf + 4));
+			memcpy(&(remoteAddr.sin_port), buf + 8, 2);
 			break;
 		case 3: 
 			nameSize = (unsigned short)buf[4];
 			name = malloc(nameSize + 1);
 			memset(name, 0, nameSize + 1);
 			memcpy(name, buf + 5, nameSize);
-			remoteIp = nameToIp(name);
-			memcpy(&remotePort, buf + 5 + nameSize, 2);
+			remoteAddr.sin_addr.s_addr = inet_addr(nameToIp(name));
+			memcpy(&(remoteAddr.sin_port), buf + 5 + nameSize, 2);
 			break;
 		default:
 			printf("address type is wrong\n");
+			close((int)fd);
 			return NULL;
 
 	}
-	// 解析客户端数据包，获取ip以及端口
-	struct sockaddr_in remoteAddr;
-	memset(&remoteAddr, 0, sizeof(remoteAddr));
-	remoteAddr.sin_family = AF_INET;
-	remoteAddr.sin_addr.s_addr = remoteIp;
-	remoteAddr.sin_port = remotePort;
 
 	printf("remote addr %s:%d\n", inet_ntoa(remoteAddr.sin_addr), ntohs(remoteAddr.sin_port));
 
@@ -107,6 +104,7 @@ void* worker(void* fd) {
 
 	if (send((int)fd, buf, 10, 0) < 0) {
 		perror("send");
+		close((int)fd);
 		return NULL;
 	}
 
@@ -117,10 +115,13 @@ void* worker(void* fd) {
 	int remoteFd = socket(AF_INET, SOCK_STREAM, 0);
 	if (remoteFd < 0) {
 		perror("socket");
+		close((int)fd);
 		return NULL;
 	}
 	if (connect(remoteFd, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr)) < 0) {
 		perror("connect");
+		close((int)fd);
+		close(remoteFd);
 		return NULL;
 	}
 
@@ -139,17 +140,23 @@ void* worker(void* fd) {
 	while(1) {
 		if (select(nfds, &fdSet, NULL, NULL, 0) < 0) {
 			perror("select");
+			close((int)fd);
+			close(remoteFd);
 			return NULL;	
 		}	
 		if (FD_ISSET((int)fd, &fdSet)) {
 			memset(buf, 0, sizeof(buf));
 			if ((_s = recv((int)fd, buf, sizeof(buf), 0)) < 0) {
 				perror("recv");
+				close((int)fd);
+				close(remoteFd);
 				return NULL;
 			}
 			if (send(remoteFd, buf, _s, 0) < 0) {
 				printf("%s\n", buf);
 				perror("send");
+				close((int)fd);
+				close(remoteFd);
 				return NULL;
 			}
 		}
@@ -157,11 +164,15 @@ void* worker(void* fd) {
 			memset(buf, 0, sizeof(buf));
 			if ((_s = recv(remoteFd, buf, sizeof(buf), 0)) < 0) {
 				perror("recv");
+				close((int)fd);
+				close(remoteFd);
 				return NULL;
 			}
 			if (send((int)fd, buf, _s, 0) < 0) {
 				printf("%s\n", buf);
 				perror("send");
+				close((int)fd);
+				close(remoteFd);
 				return NULL;
 			}
 		}
