@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <string.h>
+#include "array.h"
 
 #define SERVER_IP "0.0.0.0"
 #define SERVER_PORT 8888
@@ -22,9 +23,66 @@ int main() {
 	} else if (pid == 0) {
 		// child
 		close(fds[1]);
+		
+		fd_set readFdSet, readFdSetBak;
+		FD_ZERO(readFdSet);
+		FD_SET(fds[0], &readFdSet);
+		FD_COPY(&readFdSet, &readFdSetBak);
+		
+		/*
+		int
+     select(int nfds, fd_set *restrict readfds, fd_set *restrict writefds,
+         fd_set *restrict errorfds, struct timeval *restrict timeout);
+		*/ 
+		
+		int nfds = fds[0] + 1;
 		int clientFd = 0;
-		while (read(fds[0], &clientFd, sizeof(int))) {
-			printf("client:%d\n", clientFd);
+
+		int clientFds[200] = {0};
+		int remoteFds[200] = {0};
+		int cur = 0;
+
+		char buf[BUF_SIZE] = {0};
+
+		while (1) {
+			FD_COPY(&readFdSetBak, &readFdSet);
+			if (select(nfds, &readFdSet, NULL, NULL, NULL) < 0) {
+				perror("select");
+				return -1;
+			}
+			int i = 0;
+			for (i = 0; i < FD_SIZE; i++) {
+				if (FD_ISSET(i, &readFdSet)) {
+					if (i == fds[0]) {
+						if (read(fds[0], &clientFd, sizeof(clientFd)) < 0) {
+							perror("read");
+							return -1;
+						}
+						FD_SET(clientFd, &readFdSetBak);
+					} else {
+						if (arraySearch(i, clientFds) == -1) {
+							// 客户端发来消息 建立socks5连接
+						} else if (arraySearch(i, remoteFds) == -1) {
+							// 	远端服务器发来消息
+						} else {
+							// 	客户端发来消息 未建立socks5连接			
+							memset(buf, 0, sizeof(buf));
+							if (recv(i, buf, sizeof(buf), 0) < 0) {
+								perror("recv");
+								close(i);
+							
+							}
+							
+						
+										
+						}
+						
+
+					
+					}		
+				}
+			}				
+			
 			
 		}
 	} else {
