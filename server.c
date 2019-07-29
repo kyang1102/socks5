@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <signal.h>
 #include "array.h"
 
 #define SERVER_IP "0.0.0.0"
@@ -14,7 +15,7 @@
 #define QUEUE_SIZE 100
 #define BUF_SIZE 500
 
-int getMaxFd(struct fd_set fds) {
+int getMaxFd(fd_set fds) {
 	int maxFd = -1;
 	int i;
 	for (i = 0; i < FD_SETSIZE; i++) {
@@ -96,7 +97,8 @@ int main() {
 	fd_set readFdSet, readFdSetBak;
 	FD_ZERO(&readFdSet);
 	FD_SET(listenFd, &readFdSet);
-	FD_COPY(&readFdSet, &readFdSetBak);
+	//FD_COPY(&readFdSet, &readFdSetBak);
+    readFdSetBak = readFdSet;
 	
 	int nfds = getMaxFd(readFdSetBak) + 1;
 	int clientFd = 0;
