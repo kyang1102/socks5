@@ -9,6 +9,7 @@
 int negotiatedAuth(int fd) {
 	char buf[BUF_SIZE] = {0};
 	if (recv(fd, buf, sizeof(buf), 0) < 0) {
+		perror("recv");
 		return -1;
 	}
 	int version = (int)buf[0];
@@ -26,6 +27,7 @@ int negotiatedAuth(int fd) {
     buf[0] = 5;
     buf[1] = 0;
     if (send((int)fd, buf, 2, 0) < 0) {
+		perror("send");
 		return -1;
     }
 	return 0;
@@ -34,6 +36,7 @@ int negotiatedAuth(int fd) {
 int requestAgent(int fd, struct sockaddr_in* addr, struct sockaddr_in listenAddr) {
 	char buf[BUF_SIZE] = {0};
 	if (recv(fd, buf, sizeof(buf), 0) < 0) {
+		perror("recv");
 		return -1;
 	}	
 	int aType = (int)buf[3];
@@ -52,6 +55,7 @@ int requestAgent(int fd, struct sockaddr_in* addr, struct sockaddr_in listenAddr
 			name = (char*)malloc(len + 1);
 			memset(name, 0, len + 1);
 			memcpy(name, buf + 5, len);
+			printf("%s\n", name);
 			addr->sin_addr.s_addr = inet_addr(nameToIp(name));
 			memcpy(&(addr->sin_port), buf + 5 + len, 2);
 			break;
@@ -69,6 +73,7 @@ int requestAgent(int fd, struct sockaddr_in* addr, struct sockaddr_in listenAddr
 	memcpy(buf + 8, &(listenAddr.sin_port), 2);
 
 	if (send(fd, buf, 10, 0) < 0) {
+		perror("send");
 		return -1;
 	}
 	return 0;

@@ -5,10 +5,12 @@
 #include <string.h>
 #include <sys/select.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "array.h"
 
 #define SERVER_IP "0.0.0.0"
-#define SERVER_PORT 8888
+#define SERVER_PORT 8889
 #define QUEUE_SIZE 100
 #define BUF_SIZE 500
 
@@ -23,7 +25,54 @@ int getMaxFd(struct fd_set fds) {
 	return maxFd;
 }
 
+int timeoutConnect(struct sockaddr_in *addr, int sec) {
+	struct timeval tv;
+	tv.tv_sec = sec;
+	tv.tv_usec = 0;
+
+	int remoteFd = socket(AF_INET, SOCK_STREAM, 0);
+	if (remoteFd < 0) {
+		perror("socket");
+		return -1;
+	}
+	fcntl(remoteFd, F_SETFL, O_NONBLOCK);
+	int ret = connect(remoteFd, (struct sockaddr*)addr, sizeof(struct sockaddr_in));
+   	if (ret < 0) {
+		if (errno != EINPROGRESS) {
+			perror("connect");
+			close(remoteFd);
+			return -1;
+		}
+	} else if (ret == 0) {
+		return remoteFd;
+	}
+
+	fd_set rset, wset;
+	FD_ZERO(&rset);
+	FD_SET(remoteFd, &rset);
+	wset = rset;
+
+	ret = select(remoteFd + 1, &rset, &wset, NULL, &tv);
+    if (ret <= 0) {
+        close(remoteFd);
+        return -1;
+    }
+	int error = 0;
+	socklen_t len;
+	if (FD_ISSET(remoteFd, &rset) || FD_ISSET(remoteFd, &wset)) {
+        len = sizeof(error);
+        getsockopt(remoteFd, SOL_SOCKET, SO_ERROR, &error, &len);
+    }
+
+    if (error) {
+        close(remoteFd);
+        return -1;
+    }
+    return remoteFd;	
+}
+
 int main() {
+	signal(SIGPIPE, SIG_IGN);
 	int listenFd = socket(AF_INET, SOCK_STREAM, 0);
 	if (listenFd < 0) {
 		perror("socket");
@@ -64,7 +113,8 @@ int main() {
 
 	int targetFd;
 	while (1) {
-		FD_COPY(&readFdSetBak, &readFdSet);
+		//FD_COPY(&readFdSetBak, &readFdSet);
+		readFdSet = readFdSetBak;
 		if (select(nfds, &readFdSet, NULL, NULL, NULL) < 0) {
 			perror("select");
 			return -1;
@@ -109,28 +159,25 @@ int main() {
 								removeByKey(j, srArr, &cur);	
 								close(i);
 							} else {
+								printf("remote %s:%d\n", inet_ntoa(remoteAddr.sin_addr), ntohs(remoteAddr.sin_port));
 								srArr[j].status = STATUS_ESTABLISH;
-								remoteFd = socket(AF_INET, SOCK_STREAM, 0);
+								remoteFd = timeoutConnect(&remoteAddr, 1);
 								if (remoteFd < 0) {
 									FD_CLR(i, &readFdSetBak);
 									nfds = getMaxFd(readFdSetBak) + 1;
 									removeByKey(j, srArr, &cur);
 									close(i);
-								}	
-								if (connect(remoteFd, (struct sockaddr*)&remoteAddr, sizeof(remoteAddr)) < 0) {
-									FD_CLR(i, &readFdSetBak);
+								} else {
+									srArr[j].remote_fd = remoteFd;
+									FD_SET(remoteFd, &readFdSetBak);
 									nfds = getMaxFd(readFdSetBak) + 1;
-									removeByKey(j, srArr, &cur);
-									close(i);
 								}
-								srArr[j].remote_fd = remoteFd;
-								FD_SET(remoteFd, &readFdSetBak);
-								nfds = getMaxFd(readFdSetBak) + 1;
 							}
 							break;
 						case STATUS_ESTABLISH:
 							memset(buf, 0, sizeof(buf));
 							if ((_s = recv(i, buf, sizeof(buf), 0)) <= 0) {
+								perror("recv1");
 								FD_CLR(srArr[j].client_fd, &readFdSetBak);
 								FD_CLR(srArr[j].remote_fd, &readFdSetBak);
 								nfds = getMaxFd(readFdSetBak) + 1;
@@ -145,7 +192,8 @@ int main() {
 									targetFd = srArr[j].client_fd;
 								}
 
-								if (send(targetFd, buf, _s, 0) < 0) {
+								if (send(targetFd, buf, _s, 0) <= 0) {
+									perror("send");
 									FD_CLR(srArr[j].client_fd, &readFdSetBak);
 									FD_CLR(srArr[j].remote_fd, &readFdSetBak);
 									nfds = getMaxFd(readFdSetBak) + 1;
