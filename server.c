@@ -167,7 +167,11 @@ int main() {
 									nfds = getMaxFd(readFdSetBak) + 1;
 									removeByKey(j, srArr, &cur);
 									close(i);
+									printf("timeout connect turn off %d\n", i);
 								} else {
+									int opts = fcntl(remoteFd, F_GETFL);
+									opts = opts & (~O_NONBLOCK);
+									fcntl(remoteFd, F_SETFL, opts);
 									srArr[j].remote_fd = remoteFd;
 									FD_SET(remoteFd, &readFdSetBak);
 									nfds = getMaxFd(readFdSetBak) + 1;
@@ -178,12 +182,14 @@ int main() {
 							memset(buf, 0, sizeof(buf));
 							if ((_s = recv(i, buf, sizeof(buf), 0)) <= 0) {
 								perror("recv1");
+								printf("fd:%d, %d, %d\n", i, srArr[j].client_fd, srArr[j].remote_fd);
 								FD_CLR(srArr[j].client_fd, &readFdSetBak);
 								FD_CLR(srArr[j].remote_fd, &readFdSetBak);
 								nfds = getMaxFd(readFdSetBak) + 1;
-								removeByKey(j, srArr, &cur);
 								close(srArr[j].client_fd);
 								close(srArr[j].remote_fd);
+								printf("recv1 turn off %d, %d\n", srArr[j].client_fd, srArr[j].remote_fd);
+								removeByKey(j, srArr, &cur);
 							}	
 							if (_s > 0) {
 								if (i == srArr[j].client_fd) {
@@ -200,6 +206,7 @@ int main() {
 									removeByKey(j, srArr, &cur);
 									close(srArr[j].client_fd);
 									close(srArr[j].remote_fd);
+									printf("send turn off %d, %d\n", srArr[j].client_fd, srArr[j].remote_fd);
 								}
 							}
 							break;

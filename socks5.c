@@ -9,7 +9,7 @@
 int negotiatedAuth(int fd) {
 	char buf[BUF_SIZE] = {0};
 	if (recv(fd, buf, sizeof(buf), 0) < 0) {
-		perror("recv");
+		perror("recv2");
 		return -1;
 	}
 	int version = (int)buf[0];
@@ -36,7 +36,7 @@ int negotiatedAuth(int fd) {
 int requestAgent(int fd, struct sockaddr_in* addr, struct sockaddr_in listenAddr) {
 	char buf[BUF_SIZE] = {0};
 	if (recv(fd, buf, sizeof(buf), 0) < 0) {
-		perror("recv");
+		perror("recv3");
 		return -1;
 	}	
 	int aType = (int)buf[3];
